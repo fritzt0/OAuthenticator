@@ -5,6 +5,7 @@ import Foundation
 /// This is used to abstract the actual networking system from the underlying authentication
 /// mechanism.
 public typealias URLResponseProvider = (URLRequest) async throws -> (Data, URLResponse)
+public typealias URLUserDataProvider<UserDataType: Sendable> = (URLRequest) async throws -> (UserDataType, URLResponse)
 
 public struct Token: Codable, Hashable, Sendable {
 	public let value: String
@@ -97,7 +98,7 @@ public struct TokenHandling {
 	public typealias AuthorizationURLProvider = (AppCredentials) throws -> URL
 	public typealias LoginProvider = (URL, AppCredentials, URL, URLResponseProvider) async throws -> Login
 	public typealias RefreshProvider = (Login, AppCredentials, URLResponseProvider) async throws -> Login
-	public typealias ResponseStatusProvider = ((Data, URLResponse)) throws -> ResponseStatus
+	public typealias ResponseStatusProvider = ((any Sendable, URLResponse)) throws -> ResponseStatus
 
 	public let authorizationURLProvider: AuthorizationURLProvider
 	public let loginProvider: LoginProvider
@@ -114,11 +115,11 @@ public struct TokenHandling {
 		self.responseStatusProvider = responseStatusProvider
 	}
 
-	public static func allResponsesValid(result: (Data, URLResponse)) throws -> ResponseStatus {
+	public static func allResponsesValid<UserDataType: Sendable>(result: (UserDataType, URLResponse)) throws -> ResponseStatus {
 		return .valid
 	}
 
-	public static func refreshOrAuthorizeWhenUnauthorized(result: (Data, URLResponse)) throws -> ResponseStatus {
+	public static func refreshOrAuthorizeWhenUnauthorized<UserDataType: Sendable>(result: (UserDataType, URLResponse)) throws -> ResponseStatus {
 		guard let response = result.1 as? HTTPURLResponse else {
 			throw AuthenticatorError.httpResponseExpected
 		}

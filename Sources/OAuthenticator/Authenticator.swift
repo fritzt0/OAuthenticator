@@ -18,7 +18,7 @@ public enum AuthenticatorError: Error {
 }
 
 /// Manage state required to executed authenticated URLRequests.
-public final class Authenticator {
+public final class Authenticator<UserDataType: Sendable> {
 	public typealias UserAuthenticator = (URL, String) async throws -> URL
     public typealias AuthenticationStatusHandler = (Result<Login, AuthenticatorError>) -> Void
     
@@ -81,31 +81,32 @@ public final class Authenticator {
 
 	let config: Configuration
 
-	let urlLoader: URLResponseProvider
+	let responseLoader: URLResponseProvider
+	let userDataLoader: URLUserDataProvider<UserDataType>
 	private var activeTokenTask: Task<Login, Error>?
 	private var localLogin: Login?
 
-	public init(config: Configuration, urlLoader loader: URLResponseProvider? = nil) {
+	public init(config: Configuration, responseLoader: URLResponseProvider? = nil, userDataLoader: @escaping URLUserDataProvider<UserDataType>) {
 		self.config = config
 
-		self.urlLoader = loader ?? URLSession.defaultProvider
+		self.responseLoader = responseLoader ?? URLSession.defaultProvider
+		self.userDataLoader = userDataLoader
 	}
 
-	/// A default `URLSession`-backed `URLResponseProvider`.
-	@MainActor
-	public static let defaultResponseProvider: URLResponseProvider = {
-		let session = URLSession(configuration: .default)
+	public init(config: Configuration, urlLoader: URLResponseProvider? = nil) where UserDataType == Data {
+		self.config = config
 
-		return session.responseProvider
-	}()
+		self.responseLoader = urlLoader ?? URLSession.defaultProvider
+		self.userDataLoader = urlLoader ?? URLSession.defaultProvider
+	}
 
 	/// Add authentication for `request`, execute it, and return its result.
-	public func response(for request: URLRequest) async throws -> (Data, URLResponse) {
+	public func response(for request: URLRequest) async throws -> (UserDataType, URLResponse) {
 		let userAuthenticator = config.userAuthenticator
 
 		let login = try await loginTaskResult(manual: false, userAuthenticator: userAuthenticator)
 
-		let result = try await authedResponse(for: request, login: login)
+		let result: (UserDataType, URLResponse) = try await authedResponse(for: request, login: login)
 
 		let action = try config.tokenHandling.responseStatusProvider(result)
 
@@ -141,13 +142,13 @@ public final class Authenticator {
 		}
 	}
 
-	private func authedResponse(for request: URLRequest, login: Login) async throws -> (Data, URLResponse) {
+	private func authedResponse(for request: URLRequest, login: Login) async throws -> (UserDataType, URLResponse) {
 		var authedRequest = request
 		let token = login.accessToken.value
 
 		authedRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-		return try await urlLoader(authedRequest)
+		return try await userDataLoader(authedRequest)
 	}
 
 	/// Manually perform user authentication, if required.
@@ -156,6 +157,14 @@ public final class Authenticator {
 		let _ = try await loginTaskResult(manual: true, userAuthenticator: userAuthenticator ?? config.userAuthenticator)
 	}
 }
+
+/// A default `URLSession`-backed `URLResponseProvider`.
+@MainActor
+public let defaultAuthenticatorResponseProvider: URLResponseProvider = {
+	let session = URLSession(configuration: .default)
+
+	return session.responseProvider
+}()
 
 extension Authenticator {
 	private func retrieveLogin() async throws -> Login? {
@@ -252,7 +261,7 @@ extension Authenticator {
 		let scheme = try config.appCredentials.callbackURLScheme
 
 		let	url = try await userAuthenticator(codeURL, scheme)
-		let login = try await config.tokenHandling.loginProvider(url, config.appCredentials, codeURL, urlLoader)
+		let login = try await config.tokenHandling.loginProvider(url, config.appCredentials, codeURL, responseLoader)
 
 		try await storeLogin(login)
 
@@ -272,7 +281,7 @@ extension Authenticator {
 			return nil
 		}
 
-		let login = try await refreshProvider(login, config.appCredentials, urlLoader)
+		let login = try await refreshProvider(login, config.appCredentials, responseLoader)
 
 		try await storeLogin(login)
 
@@ -281,7 +290,7 @@ extension Authenticator {
 }
 
 extension Authenticator {
-	public var responseProvider: URLResponseProvider {
+	public var responseProvider: URLUserDataProvider<UserDataType> {
 		{ try await self.response(for: $0) }
 	}
 }
