@@ -104,13 +104,15 @@ public actor Authenticator {
 		return session.responseProvider
 	}()
 
-	/// Add authentication for `request`, execute it, and return its result.
-	public func response(for request: URLRequest) async throws -> (Data, URLResponse) {
+	public func response<Payload>(
+		for request: URLRequest,
+		operation: (URLRequest) async throws -> (Payload, URLResponse)
+	) async throws -> (Payload , URLResponse) {
 		let userAuthenticator = config.userAuthenticator
 
 		let login = try await loginTaskResult(manual: false, userAuthenticator: userAuthenticator)
 
-		let result = try await authedResponse(for: request, login: login)
+		let result = try await authedResponse(for: request, login: login, operation: operation)
 
 		let action = try config.tokenHandling.responseStatusProvider(result)
 
@@ -120,7 +122,7 @@ public actor Authenticator {
 				return try await performUserAuthentication(manual: false, userAuthenticator: userAuthenticator)
 			})
 
-			return try await authedResponse(for: request, login: newLogin)
+			return try await authedResponse(for: request, login: newLogin, operation: operation)
 		case .refresh:
 			let newLogin = try await loginFromTask(task: Task {
 				guard let value = try await refresh(with: login) else {
@@ -130,7 +132,7 @@ public actor Authenticator {
 				return value
 			})
 
-			return try await authedResponse(for: request, login: newLogin)
+			return try await authedResponse(for: request, login: newLogin, operation: operation)
 		case .refreshOrAuthorize:
 			let newLogin = try await loginFromTask(task: Task {
 				if let value = try await refresh(with: login) {
@@ -140,19 +142,19 @@ public actor Authenticator {
 				return try await performUserAuthentication(manual: false, userAuthenticator: userAuthenticator)
 			})
 
-			return try await authedResponse(for: request, login: newLogin)
+			return try await authedResponse(for: request, login: newLogin, operation: operation)
 		case .valid:
 			return result
 		}
 	}
 
-	private func authedResponse(for request: URLRequest, login: Login) async throws -> (Data, URLResponse) {
+	private func authedResponse<Payload>(for request: URLRequest, login: Login, operation: (URLRequest) async throws -> (Payload, URLResponse)) async throws -> (Payload, URLResponse) {
 		var authedRequest = request
 		let token = login.accessToken.value
 
 		authedRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
-		return try await urlLoader(authedRequest)
+		return try await operation(authedRequest)
 	}
 
 	/// Manually perform user authentication, if required.
